@@ -27,7 +27,6 @@ VOLUME ["/import/support"]
 
 # Copy application code
 COPY mcp_server ./mcp_server
-COPY ptop ./ptop
 COPY mcp_server/docs ./mcp_server/docs
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh

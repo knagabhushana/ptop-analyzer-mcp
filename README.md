@@ -38,17 +38,24 @@ pip install -r requirements.txt
 DEBUG_VERBOSE=1 LOG_LEVEL=DEBUG uvicorn mcp_server.server:app --reload --port 8085
 ```
 
-### 3. Verify Installation
+### 3. Verify the Server Is Running
+
 
 ```bash
-# Check health endpoint
-curl http://localhost:8085/healthz
+# 1. Check container status (Docker Compose; specify file explicitly)
+docker compose -f docker-compose.timescale.yml ps
+# (If your Docker version uses the older plugin, try: docker-compose -f docker-compose.timescale.yml ps)
 
-# Or test load bundle
-curl -s -X POST http://localhost:8085/support/load_bundle \
-  -H 'Content-Type: application/json' \
-  -d '{"tenant_id":"TICKET-123"}' | jq
+# 2. Tail logs for the API container (shows startup + requests)
+docker compose -f docker-compose.timescale.yml logs -f mcp
+# (If you see 'no configuration file provided', you are in the wrong directory or need -f)
+
+# 3. (Optional) Probe MCP transport (expect 406 when not using a proper MCP client)
+curl -i http://localhost:8085/mcp | head -n 1
+# A 406 Not Acceptable here is normal when hitting the MCP streaming endpoint without the required headers/upgrade.
 ```
+
+If container logs show successful startup (Uvicorn serving) and a plain curl to `/mcp` returns `406 Not Acceptable`, the server is running (the 406 is expected without proper MCP client negotiation).
 
 ## Client Setup
 
@@ -105,13 +112,17 @@ make run IMPORT_DIR=/path/to/your/data PORT=8085
 
 ```json
 {
-    "servers": {    
-        "ptops-analyzer": {
-            "url": "http://localhost:8085/mcp",
-            "type": "http"
-        }
-    },
-    "inputs": []
+  "mcpServers": {
+    "ptops-timescale": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "http://localhost:8085/mcp",
+        "--type",
+        "http"
+      ]     
+    }
+  }
 }
 ```
 
@@ -402,11 +413,12 @@ These are natural language prompts you can use with any MCP client (VS Code, Cla
 
 | Problem | Solution |
 |---------|----------|
-| MCP tools not visible | Verify server is running: `curl http://localhost:8085/healthz` |
+| MCP tools not visible | Verify server is running: `docker compose ps` and `docker compose logs mcp` (or `curl http://localhost:8085/mcp`) |
 | Bundle load fails | Check path exists and is mounted in container: `IMPORT_DIR` |
 | Empty metric results | Ensure bundle has data and correct categories are loaded |
 | SQL query errors | Use `metric_schema` to check available columns and data types |
 | Slow performance | Check performance optimization environment variables (see below) |
+| 406 on `/mcp` | Normal when curling raw MCP endpoint; use a compatible MCP client or just verify `/` root returns status |
 
 ### Debug Mode
 

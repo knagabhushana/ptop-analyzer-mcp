@@ -18,10 +18,11 @@ services:
     environment:
       - TIMESCALE_DSN=postgresql://tsdev:tsdev@timescaledb:5432/ptops
       - ENABLE_TIMESCALE=1
+      - DEBUG_VERBOSE=0
       - SQLITE_PATH=/data/state/bundles.db
       # Toggle COPY ingestion (set to true to test COPY performance, false for INSERT baseline)
       - PTOPS_USE_COPY_COMMAND=false
-      - PTOPS_BATCH_SIZE=20000
+      - PTOPS_BATCH_SIZE=10000
       - PTOPS_MAX_WORKERS=4
     depends_on:
       timescaledb:

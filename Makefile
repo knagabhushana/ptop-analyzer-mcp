@@ -3,7 +3,7 @@ IMAGE?=perf-mcp-server:dev
 DOCKER?=docker
 PORT?=8085
 PY=python3
-IMPORT_DIR?=/Users/knagabhushana/import
+IMPORT_DIR?=/import
 # Default logical location inside container where bundles live; override as needed.
 SUPPORT_BASE_DIR?=/import/customer_data/support
 DOCKER_ENV?=-e LOG_LEVEL=DEBUG -e DEBUG_VERBOSE=1 -e SUPPORT_BASE_DIR=$(SUPPORT_BASE_DIR) -e ENABLE_TIMESCALE=1

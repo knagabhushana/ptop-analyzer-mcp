@@ -59,6 +59,9 @@ class TimescaleWriter:
         self.total_rows_added = 0
         self.total_flushes = 0
         self.total_rows_flushed = 0
+        # New: differentiate between rows successfully committed vs. attempted (flushed counts attempted)
+        self.total_rows_committed = 0
+        self.total_rows_failed = 0
         self.last_flush_payload: Dict[str, str] = {}
         self.dsn = dsn or __import__('os').environ.get('TIMESCALE_DSN')
         self.base_url = None  # API compatibility placeholder
@@ -196,7 +199,7 @@ class TimescaleWriter:
                 for col in col_list:
                     if col not in ('ts','bundle_id','sptid','metric_category','host', *grp.local_labels):
                         cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} DOUBLE PRECISION")
-                        
+                # Build value tuples (list so we can chunk)
                 value_tuples: List[Tuple[Any, ...]] = []
                 for r in rows:
                     tup: List[Any] = []
@@ -204,23 +207,43 @@ class TimescaleWriter:
                         v = r.values.get(c)
                         tup.append(v if v != '' else None)
                     value_tuples.append(tuple(tup))
-                    
-                if _pg_extras and hasattr(_pg_extras, 'execute_values'):
-                    _pg_extras.execute_values(
-                        cur,
-                        f"INSERT INTO {table} ({','.join(col_list)}) VALUES %s",
-                        value_tuples,
-                        page_size=self.insert_page_size
-                    )
-                    dbg(f'timescale_insert_ok table={table} rows={len(rows)} mode=execute_values page_size={self.insert_page_size}')
-                else:
-                    placeholders = '(' + ','.join(['%s']*len(col_list)) + ')'
-                    sql = f"INSERT INTO {table} ({','.join(col_list)}) VALUES " + ','.join([placeholders]*len(value_tuples))
-                    flat_params: List[Any] = []
-                    for vt in value_tuples:
-                        flat_params.extend(vt)
-                    cur.execute(sql, flat_params)
-                    dbg(f'timescale_insert_ok table={table} rows={len(rows)} mode=multi_values')
+
+                # Parameter limit guard: PostgreSQL hard limit 65535 parameters per statement.
+                # Conservative ceiling we target: 60000 (can override via env PTOPS_PARAM_LIMIT_SAFETY)
+                import os
+                param_ceiling = int(os.environ.get('PTOPS_PARAM_LIMIT_SAFETY', '60000'))
+                cols = len(col_list)
+                # Maximum rows per SQL statement respecting parameter ceiling (>=1)
+                max_rows_per_stmt = max(1, param_ceiling // max(1, cols))
+                # Further restrict by insert_page_size (which execute_values will internally chunk again)
+                # We'll drive outer loop by explicit chunking so even fallback path stays safe.
+                total_rows = len(value_tuples)
+                if max_rows_per_stmt < total_rows:
+                    dbg(f'param_limit_chunking table={table} total_rows={total_rows} cols={cols} max_rows_per_stmt={max_rows_per_stmt} ceiling={param_ceiling}')
+
+                # Iterate over chunks
+                start = 0
+                while start < total_rows:
+                    chunk = value_tuples[start:start+max_rows_per_stmt]
+                    start += max_rows_per_stmt
+                    if _pg_extras and hasattr(_pg_extras, 'execute_values'):
+                        # Use a page_size no larger than chunk length and existing insert_page_size
+                        page_size = min(self.insert_page_size, len(chunk))
+                        _pg_extras.execute_values(
+                            cur,
+                            f"INSERT INTO {table} ({','.join(col_list)}) VALUES %s",
+                            chunk,
+                            page_size=page_size
+                        )
+                        dbg(f'timescale_insert_ok table={table} rows={len(chunk)} mode=execute_values page_size={page_size}')
+                    else:
+                        placeholders = '(' + ','.join(['%s']*cols) + ')'
+                        sql = f"INSERT INTO {table} ({','.join(col_list)}) VALUES " + ','.join([placeholders]*len(chunk))
+                        flat_params: List[Any] = []
+                        for vt in chunk:
+                            flat_params.extend(vt)
+                        cur.execute(sql, flat_params)
+                        dbg(f'timescale_insert_ok table={table} rows={len(chunk)} mode=multi_values')
                     
         except Exception as e:
             dbg(f'timescale_insert_fail table={table} err={e.__class__.__name__}:{e}')
@@ -261,10 +284,12 @@ class TimescaleWriter:
                         self._flush_with_copy(table, rows, grp, col_list)
                     else:
                         self._flush_with_insert(table, rows, grp, col_list)
-                        
+
                     self._conn.commit()
+                    self.total_rows_committed += len(rows)
                 except Exception as e:
                     dbg(f'timescale_flush_fail table={table} err={e.__class__.__name__}:{e}')
+                    self.total_rows_failed += len(rows)
                     try:
                         self._conn.rollback()
                     except Exception:
@@ -304,6 +329,8 @@ class TimescaleWriter:
         return {
             'total_rows_added': self.total_rows_added,
             'total_rows_flushed': self.total_rows_flushed,
+            'total_rows_committed': self.total_rows_committed,
+            'total_rows_failed': self.total_rows_failed,
             'total_flushes': self.total_flushes,
             'connected': bool(self._conn),
             'use_copy': self.use_copy,
