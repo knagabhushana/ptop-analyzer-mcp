@@ -1,0 +1,13 @@
+# Minimal requirements for MCP perf server prototype (HTTP FastAPI removed; using fastmcp only)
+fastmcp==2.11.3
+# Force a FastAPI version compatible with Pydantic v2 (older FastAPI pulls pydantic<2 and causes resolver churn)
+fastapi>=0.110.0,<0.112.0
+# Allow resolver to pick a compatible pydantic (fastmcp needs >=2.5.3). Pin upper bound lightly to avoid unexpected breaking changes.
+pydantic==2.11.7
+httpx==0.28.1
+pytest==8.2.2
+sentence-transformers==2.7.0
+psycopg[binary]==3.2.10
+
+# Explicit pin: six 1.16.0 (avoid unexpected 1.17.0 fetch & hash mismatch)
+six==1.16.0

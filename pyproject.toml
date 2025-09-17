@@ -1,0 +1,12 @@
+[project]
+name = "perf-mcp-server"
+version = "0.0.1"
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["setuptools>=67", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mcp_server*"]

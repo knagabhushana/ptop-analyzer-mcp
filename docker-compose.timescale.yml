@@ -1,0 +1,35 @@
+version: '3.9'
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.14.2-pg16
+    environment:
+      - POSTGRES_PASSWORD=tsdev
+      - POSTGRES_USER=tsdev
+      - POSTGRES_DB=ptops
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U tsdev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  mcp:
+    build: .
+    environment:
+      - TIMESCALE_DSN=postgresql://tsdev:tsdev@timescaledb:5432/ptops
+      - ENABLE_TIMESCALE=1
+      - SQLITE_PATH=/data/state/bundles.db
+      # Toggle COPY ingestion (set to true to test COPY performance, false for INSERT baseline)
+      - PTOPS_USE_COPY_COMMAND=false
+      - PTOPS_BATCH_SIZE=20000
+      - PTOPS_MAX_WORKERS=4
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    ports:
+      - "8085:8085"  # Expose MCP server HTTP port to host
+    volumes:
+      - ${IMPORT_DIR:-/Users/knagabhushana/import}:/import
+      - ./ptop:/app/ptop:ro
+      - ./mcp_server:/app/mcp_server:ro
+    command: ["./docker-entrypoint.sh"]
