@@ -34,6 +34,7 @@ SYSTEM_PROMPT = (
     "12. timescale_sql(sql=...) executes arbitrary read-only SELECT / CTE / time_bucket / Toolkit queries (SELECT-only, auto LIMIT).\n"
     "13. Compose CTEs, window functions, aggregates, percentiles freely—no mutation statements allowed.\n"
     "Domain Guidance: CPU category metrics are per-CPU (one row per timestamp per cpu_id). Per-process metrics live in the TOP category (process-centric: pid, command, cpu%, mem%). If a user asks for per-process CPU/memory stats, direct discovery/search toward TOP (not CPU). If TOP metrics aren't present yet, respond that process-level metrics are not ingested in the current dataset.\n"
+    "Fast Path Guidance: If the user asks about fast path / fastpath / fpc / packet processing efficiency, FIRST call fastpath_architecture (concept doc) to ground the response, then cite relevant metrics (e.g. fpc_cycles_per_packet, fpc_cpu_busy_percent). If no fast path metrics ingested, state that FASTPATH category is absent.\n"
 )
 
 mcp = FastMCP("ptops-mcp")
@@ -163,8 +164,15 @@ def _extract_bundle(tar_path: str, tenant_id: str, bundle_hash: str, force: bool
             except Exception as e: warnings.append(f'extract_cleanup_failed:{e.__class__.__name__}')
         os.makedirs(dest, exist_ok=True)
         try:
+            # Safe extraction with member filtering to avoid upcoming Python 3.14 default changes
+            def _safe_members(members):
+                for m in members:
+                    # Prevent absolute paths or path traversal
+                    if m.name.startswith('/') or '..' in m.name.split('/'):
+                        continue
+                    yield m
             with tarfile.open(tar_path, 'r:*') as tf:
-                tf.extractall(dest)
+                tf.extractall(dest, members=_safe_members(tf.getmembers()))
         except Exception as e:
             raise ValueError(f"failed to extract bundle: {e}")
     log_dir = os.path.join(dest, 'var', 'log')
@@ -175,7 +183,6 @@ def _extract_bundle(tar_path: str, tenant_id: str, bundle_hash: str, force: bool
 
 # ----------------- Tools -----------------
 
-## Removed: healthz() per refactor (liveness implicit) -- placeholder retained for clarity
 
 @mcp.tool()
 def workflow_help() -> dict:
@@ -434,6 +441,23 @@ def alias_resolve(token: str) -> list:
         return [ {'id': d.id, 'level': d.level} for d in docs ]
     except Exception:
         return []
+
+@mcp.tool()
+def fastpath_architecture() -> dict:
+    """Return the fast path architecture concept document (L4) for grounding.
+
+    The doc id is 'concept:fastpath_architecture'. If embeddings not loaded yet,
+    they are initialized lazily. Returns {id, level, text, metadata} or an error flag.
+    """
+    from .embeddings_store import ensure_loaded, get_doc  # type: ignore
+    try:
+        ensure_loaded()
+        doc = get_doc('concept:fastpath_architecture')
+        if not doc:
+            return {'error': 'not_found'}
+        return {'id': doc.id, 'level': doc.level, 'text': doc.text, 'metadata': doc.metadata}
+    except Exception as e:
+        return {'error': e.__class__.__name__, 'detail': str(e).split('\n')[0]}
 
 def _search_docs_impl(query: str, top_k: int=5, semantic: bool=True, levels: Optional[List[str]]=None) -> list:
     from .embeddings_store import ensure_loaded, _docs  # type: ignore

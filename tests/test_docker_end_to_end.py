@@ -1,5 +1,5 @@
 import os, time, json, pathlib, pytest, tempfile, tarfile
-from datetime import datetime
+from datetime import datetime, UTC
 
 # In-process MCP integration test using test data
 TENANT = 'NIOSSPT-TEST'
@@ -83,5 +83,5 @@ def test_end_to_end_mcp():
 def debug(msg: str):
     if os.environ.get('DEBUG_INTEGRATION','1') == '0':
         return
-    ts = datetime.utcnow().strftime('%H:%M:%S.%f')[:-3]
+    ts = datetime.now(UTC).strftime('%H:%M:%S.%f')[:-3]
     print(f'[itest][{ts}] {msg}', flush=True)

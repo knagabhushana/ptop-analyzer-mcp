@@ -183,6 +183,8 @@ load_bundle {"path": "/data/bundle.tar.gz", "categories": ["CPU", "TOP", "SMAPS"
 - **`get_doc_tool`**: Retrieve specific documentation
 - **`concepts`**: List available concept documentation
 - **`workflow_help`**: Get workflow guidance
+- **`fastpath_architecture`**: Returns L4 fast path DNS acceleration concept (cycles_per_packet, busy_percent, cache hit vs miss, vDCA DPDK execution) to ground packet/fast path efficiency answers.
+
 
 ## Example Usage Prompts
 

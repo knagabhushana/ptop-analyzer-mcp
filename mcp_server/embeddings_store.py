@@ -170,6 +170,18 @@ def ensure_loaded():
     if not _loaded:
         load_embeddings()
 
+def reload_embeddings(path: str = DOCS_EMBEDDINGS_PATH) -> None:
+    """Force a reload of embeddings file (test/debug utility).
+
+    Clears in-memory indices and re-invokes load_embeddings ignoring the cached flag.
+    Use sparingly; not part of normal runtime path.
+    """
+    global _loaded, _docs, _alias_index, _metric_name_index, _plugin_index, _concept_ids, _category_index
+    with _lock:
+        _loaded = False
+        _docs.clear(); _alias_index.clear(); _metric_name_index.clear(); _plugin_index.clear(); _concept_ids.clear(); _category_index.clear()
+    load_embeddings(path)
+
 
 def get_embedding_dim() -> Optional[int]:
     """Return embedding dimension of stored docs (None if no embeddings present)."""
