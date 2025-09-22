@@ -184,14 +184,6 @@ def _extract_bundle(tar_path: str, tenant_id: str, bundle_hash: str, force: bool
 # ----------------- Tools -----------------
 
 
-@mcp.tool()
-def workflow_help() -> dict:
-    """Return concise recommended (not mandatory) workflow system prompt."""
-    return {
-        'prompt': SYSTEM_PROMPT,
-        'recommended': True,
-        'note': 'This workflow is recommended but not mandatory; tools may be invoked in any order as needed.'
-    }
 
 def _load_bundle_impl(path: Optional[str]=None, sptid: Optional[str]=None, force: bool=False, max_files: int=DEFAULT_MAX_FILES, categories: Optional[List[str]]=None) -> dict:
     dbg(f'_load_bundle_impl: path={path} sptid={sptid} force={force} cats={categories}')
@@ -261,33 +253,14 @@ def _load_bundle_impl(path: Optional[str]=None, sptid: Optional[str]=None, force
 
 @mcp.tool()
 def metric_discover(query: str, top_k: int = 3) -> dict:
-    """Lexical metric name finder: token-based fuzzy match over defined metrics.
+    """Fast lexical metric discovery.
 
-    Purpose: Provide a very fast, schema‑only heuristic discovery (no DB access) of metrics
-    that approximately match a free‑form user query. Tokens are extracted by lowercasing and
-    splitting on whitespace / '-' / ':'; each candidate metric receives +1 per token contained
-    in its name plus a category bonus when 'cpu' appears and the metric group category is CPU.
-
-    Args:
-        query: Free‑form user input describing a metric (e.g. "cpu utilization percent").
-        top_k: Maximum number of candidates to return after scoring (default 3).
-
-        Returns:
-                dict with keys:
-                    query: original input string.
-                    candidates: list[ { metric_name, table, view, metric_category, local_labels, score } ]
-                        ordered by descending score (ties preserve discovery order).
-                return {'error': e.__class__.__name__, 'detail': str(e).split('\n')[0]}
-
-    Edge Cases:
-        - Empty / whitespace query => empty candidate list.
-        - Repeated tokens are de‑duplicated (set semantics).
-
-    Performance: O(M) over in‑memory schema; safe for interactive calls.
-    Deterministic & side‑effect free.
-    """
+    Token substring scoring + small CPU category bonus. Returns {query,candidates[]} truncated to top_k.
+    No semantic or alias resolution (see metric_search for that)."""
     q = query.lower().strip()
     tokens = {t for t in q.replace('-', ' ').replace(':', ' ').split() if t}
+    if top_k <= 0:
+        return {'query': query, 'candidates': []}
     candidates = []
     for grp in SCHEMA_SPEC.values():
         for mname, meta in grp.metrics.items():
@@ -298,18 +271,23 @@ def metric_discover(query: str, top_k: int = 3) -> dict:
                 score += 1
             if score == 0:
                 continue
-            # Expose the per-metric view (same as metric name) so clients know they can query it directly.
-            candidates.append({'metric_name': mname, 'table': grp.table, 'view': mname, 'metric_category': grp.category, 'local_labels': list(grp.local_labels), 'score': score})
+            candidates.append({
+                'metric_name': mname,
+                'table': grp.table,
+                'view': mname,
+                'metric_category': grp.category,
+                'local_labels': list(grp.local_labels),
+                'score': score
+            })
     candidates.sort(key=lambda x: x['score'], reverse=True)
     return {'query': query, 'candidates': candidates[:top_k]}
 
 @mcp.tool()
 def metric_schema(metric_name: str) -> dict:
-    """Return schema metadata & example SQL for a metric view.
+    """Lookup a metric's canonical schema + columns + example SQL.
 
-    Resolves aliases. Columns include roles: timestamp, value, global, local_label.
-    Use this before building complex analytical queries with timescale_sql.
-    """
+    Resolves name or alias. Returns {metric_name, view, table, category, columns[], description, example_query}
+    or {'error':'metric_not_found'}. Example query placeholders: {bundle_id},{start_ms},{end_ms}."""
     name = metric_name.strip().lower()
     target_group=None; target_metric=None; canonical=None
     for grp in SCHEMA_SPEC.values():
@@ -394,61 +372,12 @@ def init_server() -> dict:
         status['timescale'] = {'enabled': True, 'error': str(e)}
     return status
 
-## Removed concept/search/alias tools in minimal surface
-## Reintroduce legacy doc/metric tools for backward compatibility with tests
-
-@mcp.tool()
-def get_metric_tool(metric_name: str) -> dict:
-    """Return metric doc wrapper (legacy compatibility).
-
-    Returns { name, doc } where doc may be None if not found.
-    """
-    try:
-        d = get_metric(metric_name)
-        if not d:
-            return {'name': metric_name, 'doc': None}
-        return {'name': metric_name, 'doc': {'id': d.id, 'level': d.level, 'text': d.text, 'metadata': d.metadata}}
-    except Exception:
-        return {'name': metric_name, 'doc': None}
-
-@mcp.tool()
-def get_doc_tool(doc_id: str) -> dict:
-    """Return full document by id or raise ValueError if not found (legacy)."""
-    from .embeddings_store import ensure_loaded, _docs  # type: ignore
-    ensure_loaded()
-    doc = _docs.get(doc_id)  # type: ignore
-    if not doc:
-        raise ValueError('doc_not_found')
-    return {'id': doc.id, 'level': doc.level, 'text': doc.text, 'metadata': doc.metadata}
-
-@mcp.tool()
-def concepts() -> list:
-    """Return list of concept (L4) docs (legacy placeholder)."""
-    from .embeddings_store import ensure_loaded, list_concepts  # type: ignore
-    try:
-        ensure_loaded()
-        concept_ids = list_concepts()
-        return [ {'id': doc_id, 'level': 'L4'} for doc_id in concept_ids ]
-    except Exception:
-        return []
-
-@mcp.tool()
-def alias_resolve(token: str) -> list:
-    """Resolve alias token to doc refs (legacy placeholder)."""
-    try:
-        from .embeddings_store import resolve_alias  # type: ignore
-        docs = resolve_alias(token) or []  # type: ignore
-        return [ {'id': d.id, 'level': d.level} for d in docs ]
-    except Exception:
-        return []
-
 @mcp.tool()
 def fastpath_architecture() -> dict:
-    """Return the fast path architecture concept document (L4) for grounding.
+    """Return fast path architecture concept doc (id: concept:fastpath_architecture).
 
-    The doc id is 'concept:fastpath_architecture'. If embeddings not loaded yet,
-    they are initialized lazily. Returns {id, level, text, metadata} or an error flag.
-    """
+    Use first when question mentions fast path / packet efficiency. Returns {id, level, text, metadata}
+    or {'error':...}. Lazy-loads embeddings if needed."""
     from .embeddings_store import ensure_loaded, get_doc  # type: ignore
     try:
         ensure_loaded()
@@ -459,40 +388,7 @@ def fastpath_architecture() -> dict:
     except Exception as e:
         return {'error': e.__class__.__name__, 'detail': str(e).split('\n')[0]}
 
-def _search_docs_impl(query: str, top_k: int=5, semantic: bool=True, levels: Optional[List[str]]=None) -> list:
-    from .embeddings_store import ensure_loaded, _docs  # type: ignore
-    ensure_loaded()
-    lvlset = set(levels or ['L1','L2','L4'])
-    if semantic:
-        emb = cheap_text_embedding(query)
-        matches = semantic_search(emb, top_k=top_k, levels=list(lvlset))
-    else:
-        matches = keyword_search(query, top_k=top_k, levels=list(lvlset))
-    out=[]
-    for d,score in matches:
-        out.append({'id': d.id, 'level': d.level, 'score': score, 'metric_name': d.metadata.get('metric_name')})
-    return out
-
-@mcp.tool()
-def search_docs(query: str, top_k: int=5, semantic: bool=True, levels: Optional[List[str]]=None) -> list:
-    """Legacy search returning lightweight doc refs."""
-    return _search_docs_impl(query, top_k=top_k, semantic=semantic, levels=levels)
-
-@mcp.tool()
-def search_docs_detail(query: str, top_k: int=5, semantic: bool=True, levels: Optional[List[str]]=None) -> list:
-    """Legacy detailed search returning full text for each doc."""
-    from .embeddings_store import ensure_loaded, _docs  # type: ignore
-    res = _search_docs_impl(query, top_k=top_k, semantic=semantic, levels=levels)
-    ensure_loaded()
-    detailed=[]
-    from .embeddings_store import _docs as _all  # type: ignore
-    for r in res:
-        d = _all.get(r['id'])  # type: ignore
-        if d:
-            r2 = dict(r)
-            r2['text'] = d.text
-            detailed.append(r2)
-    return detailed
+## Legacy doc/search/alias tools removed; tests migrated to metric_schema/metric_search & fastpath_architecture.
 
 def _metric_search_impl(query: str, top_k: int=5, semantic: bool=True) -> dict:
     """Implementation for metric_search tool (separated for testability)."""
@@ -578,22 +474,22 @@ def _metric_search_impl(query: str, top_k: int=5, semantic: bool=True) -> dict:
 
 @mcp.tool()
 def metric_search(query: str, top_k: int=5, semantic: bool=True) -> dict:  # wrapper
-    """Metric-only (L1) search + disambiguation.
+    """Search metrics (semantic or lexical) with disambiguation.
 
-    vs search_docs:
-        * Scope fixed to metrics (L1).
-        * Returns structured dict with heuristic decision fields.
-        * Auto select if top1>=0.90 OR (top1-top2)>=0.15 else ambiguous/no_match.
-    """
+    Returns ranked candidates + decision: auto | ambiguous | no_match. Auto if score>=0.90 or gap>=0.15.
+    Injects low-score 'hint' entries for missing process/memory categories. Output includes
+    {candidates[], decision, auto_selected, confidence, gap_threshold, abs_threshold}."""
     out = _metric_search_impl(query=query, top_k=top_k, semantic=semantic)
-    # Backward compatibility: map decision to 'auto' and add 'threshold'
-    mapping = {'auto_select':'auto', 'ambiguous':'ambiguous', 'no_match':'no_match'}
+    mapping = {'auto_select': 'auto', 'ambiguous': 'ambiguous', 'no_match': 'no_match'}
     out['decision'] = mapping.get(out['decision'], out['decision'])
-    out['threshold'] = out.get('gap_threshold')  # tests expect 'threshold'
+    out['threshold'] = out.get('gap_threshold')
     return out
 @mcp.tool()
 def load_bundle(path: Optional[str]=None, tenant_id: Optional[str]=None, force: bool=False, max_files: int=DEFAULT_MAX_FILES, categories: Optional[List[str]]=None) -> dict:
-    """Ingest a bundle/directory and make it active; returns summary dict."""
+    """Ingest a bundle (directory or sb-*.tar.gz) and activate it.
+
+    Reuses existing bundle if hash matches unless force=True. Optionally restrict categories.
+    Returns summary: {bundle_id, sptid, logs_processed, metrics_ingested, time_range, reused, warnings, workflow_prompt}."""
     all_categories = ['CPU','MEM','DISK','NET','TOP','SMAPS','DB','FASTPATH','OTHER']
     eff_categories = categories if categories else all_categories
     out = _load_bundle_impl(path=path, sptid=tenant_id, force=force, max_files=max_files, categories=eff_categories)
@@ -604,16 +500,9 @@ def load_bundle(path: Optional[str]=None, tenant_id: Optional[str]=None, force: 
 
 @mcp.tool()
 def active_context(tenant_id: Optional[str]=None) -> dict:
-    """Return metadata summary for the globally active bundle (or null placeholders).
+    """Return current active bundle metadata or null placeholders.
 
-    Ignores tenant scoping (global active model). If the active pointer references a missing
-    bundle row, returns a stub with path/time_range None to signal stale state.
-
-    Returns:
-        dict { bundle_id, path, time_range:{start_ms,end_ms}|None, metrics_ingested, sptid }
-        or all None values when no active bundle exists.
-    Side Effects: None.
-    """
+    Provides bundle_id, path, time_range, metrics_ingested, sptid. Use before queries."""
     ga = get_global_active()
     if not ga:
         return {'bundle_id': None, 'path': None, 'time_range': None, 'metrics_ingested': 0}
@@ -630,27 +519,25 @@ def active_context(tenant_id: Optional[str]=None) -> dict:
 
 @mcp.tool()
 def list_bundles_tool(tenant_id: Optional[str]=None) -> List[dict]:
-    """List all known bundles with active flag and basic ingestion counts.
+    """List all bundles with active flag and basic counts.
 
-    Tenant parameter currently ignored (global namespace). Output order mirrors underlying
-    storage enumeration (insertion / creation order) as returned by list_all_bundles().
-
-    Returns: list[ { bundle_id, sptid, path, created_at, active: bool, logs_processed } ].
-    Side Effects: None.
-    """
+    Returns list[{bundle_id,sptid,path,created_at,active,logs_processed}]."""
     rows = list_all_bundles()
     ga = get_global_active(); active_id = ga['bundle_id'] if ga else None
-    out=[]
+    out = []
     for r in rows:
         out.append({
             'bundle_id': r['bundle_id'], 'sptid': r['sptid'], 'path': r['path'], 'created_at': r['created_at'],
-            'active': r['bundle_id']==active_id, 'logs_processed': r['logs_processed']
+            'active': r['bundle_id'] == active_id, 'logs_processed': r['logs_processed']
         })
     return out
 
 @mcp.tool()
 def unload_bundle(tenant_id: Optional[str]=None, bundle_id: Optional[str]=None, purge_all: bool=False) -> dict:
-    """Remove one or all bundles; adjust active pointer and return result info."""
+    """Unload (delete) a bundle or purge all.
+
+    If bundle_id omitted uses active. purge_all=True removes every bundle and clears active pointer.
+    Returns status including promoted_bundle_id if another became active."""
     if purge_all:
         rows = list_all_bundles(); removed=len(rows)
         from .support_store import _get_conn  # type: ignore
@@ -682,15 +569,9 @@ def unload_bundle(tenant_id: Optional[str]=None, bundle_id: Optional[str]=None, 
 
 @mcp.tool()
 def ingest_status(tenant_id: Optional[str]=None) -> dict:
-    """Unified ingestion status + stats.
+    """Return ingestion summary + writer stats for active bundle (or placeholders).
 
-    Returns:
-      state: lifecycle state (currently always 'idle' after synchronous ingest)
-      bundle_id: active bundle id or None
-      summary: high-level bundle ingest summary (logs/metrics counts, time range)
-      stats: detailed writer/runtime stats (rows, internal counters) when Timescale enabled
-      notes: list of deprecation or guidance notes
-    """
+    Returns {state,bundle_id,summary?,stats,notes}. summary is None if no active bundle."""
     ga = get_global_active()
     if not ga:
         return {'state': 'idle', 'bundle_id': None, 'summary': None, 'stats': _collect_ingest_stats(), 'notes': []}
@@ -704,50 +585,13 @@ def ingest_status(tenant_id: Optional[str]=None) -> dict:
     }
     return {'state': 'idle', 'bundle_id': b['bundle_id'], 'summary': summary, 'stats': _collect_ingest_stats(), 'notes': []}
 
-@mcp.tool()
-def ingest_stats() -> dict:
-    """Deprecated wrapper: use ingest_status() which now returns 'stats'."""
-    data = _collect_ingest_stats()
-    data['deprecated'] = True
-    data['use'] = 'ingest_status.stats'
-    return data
 
 @mcp.tool()
 def timescale_sql(sql: str, max_rows: int = 500) -> dict:
-    """Run a read-only SELECT over Timescale metric views/tables with full TimescaleDB function support.
+    """Run a safe read-only SELECT / WITH query (single statement) on Timescale views.
 
-    Workflow Guidance:
-      - First call active_context() to get {start_ms,end_ms} and bundle_id.
-      - Discover metric view names via metric_discover / metric_search (field 'view').
-      - Every metric view schema: ts, value, bundle_id, sptid, metric_category, host, plus local labels (e.g. cpu_id).
-      - ALWAYS constrain queries to the active time window and bundle (use BETWEEN with to_timestamp()).
-
-    TimescaleDB Functions Supported:
-      - Time bucketing: time_bucket(), time_bucket_gapfill(), time_bucket_ng()
-      - Aggregation: first(), last(), interpolate(), locf()
-      - Hyperfunctions: stats_agg(), counter_agg(), gauge_agg(), candlestick_agg()
-      - Approximation: approx_percentile(), tdigest(), uddsketch()
-      - Time-weighted: time_weight(), average(), integral()
-      - Frequency analysis: toolkit_experimental.freq_agg()
-      - Compression functions: compress_chunk(), decompress_chunk()
-      - Continuous aggregates support with refresh policies
-      - All PostgreSQL window functions, CTEs, and analytical functions
-
-    Advanced Capabilities:
-      - Arbitrary CTEs, joins between metric views, window functions
-      - Complex time-series analysis with lag(), lead(), percentile_cont()
-      - Statistical functions: stddev(), variance(), corr(), regression_*()
-      - JSON/JSONB aggregation and path operations
-      - Array aggregation and unnesting operations
-      - Full SQL:2016 analytical window function support
-
-    Safety / Constraints:
-      - SELECT-only (single statement). Trailing semicolon optional.
-      - If no LIMIT present, an automatic LIMIT max_rows is applied.
-      - No data modification allowed.
-
-    Returns: { columns, rows, truncated }
-    """
+    Rejects non-SELECT/with keywords and multiple statements. Auto LIMIT max_rows if none provided.
+    Returns {columns, rows, records, row_count, truncated} or {'error':...}."""
     global TIMESCALE_DIRECT_CONN
     q = (sql or '').strip()
     if not q:

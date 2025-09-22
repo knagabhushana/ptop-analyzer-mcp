@@ -53,16 +53,9 @@ def test_metric_search_functionality():
     assert isinstance(result['candidates'], list)
 
 
-def test_ingest_stats():
-    """Test ingest statistics functionality"""
+def test_ingest_status():
+    """Test ingestion status (replaces deprecated ingest_stats)."""
     mcp_app.init_server()
-    
-    # Test deprecated ingest_stats (should return deprecation notice)
-    result = _tool(mcp_app.ingest_stats)()
-    assert 'deprecated' in result
-    assert result['deprecated'] is True
-    
-    # Test the new ingest_status function which should have state
     status_result = _tool(mcp_app.ingest_status)()
     assert 'state' in status_result
     assert status_result['state'] in ['idle', 'processing']
@@ -117,26 +110,19 @@ def test_metric_schema_functionality():
         pass
 
 
-def test_docs_search_functionality():
-    """Test documentation search functionality"""
+def test_metric_search_functionality_additional():
+    """Additional metric_search coverage replacing generic docs search."""
     mcp_app.init_server()
-    
-    # Test docs search
-    result = _tool(mcp_app.search_docs)("cpu metrics", top_k=3)
-    assert isinstance(result, list)
-    
-    # Test detailed docs search
-    detailed_result = _tool(mcp_app.search_docs_detail)("memory metrics", top_k=3)
-    assert isinstance(detailed_result, list)
+    result = _tool(mcp_app.metric_search)("cpu metrics", top_k=3, semantic=True)
+    assert isinstance(result, dict) and 'candidates' in result
 
 
-def test_concepts_functionality():
-    """Test concepts functionality"""
+def test_fastpath_architecture_tool():
+    """Ensure fastpath_architecture tool accessible (replaces concepts placeholder)."""
     mcp_app.init_server()
-    
-    # Test concepts (may be empty, but should not error)
-    result = _tool(mcp_app.concepts)()
-    assert isinstance(result, list)
+    doc = _tool(mcp_app.fastpath_architecture)()
+    if 'error' not in doc:
+        assert doc.get('id') == 'concept:fastpath_architecture'
 
 
 def test_timescale_sql_basic():

@@ -12,13 +12,14 @@ def _rand_unknown_token():
 
 
 def test_metric_search_known_metric():
+    metric_name = None
     for candidate in ['cpu_utilization', 'cpu_utilization_percent', 'mem_total_memory']:
-        doc = _tool(mcp_app.get_metric_tool)(candidate)
-        if doc.get('doc'):
+        schema = _tool(mcp_app.metric_schema)(candidate)
+        if 'error' not in schema:
             metric_name = candidate
             break
-    else:
-        pytest.skip('no known metric docs present')
+    if metric_name is None:
+        pytest.skip('no known metric schemas present')
     res = _tool(mcp_app.metric_search)(metric_name, top_k=3)
     assert res['candidates'], 'expected at least one candidate'
     assert res['decision'] in ['auto', 'ambiguous', 'no_match']

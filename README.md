@@ -35,7 +35,8 @@ make run IMPORT_DIR=/path/to/your/data PORT=8085
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-DEBUG_VERBOSE=1 LOG_LEVEL=DEBUG uvicorn mcp_server.server:app --reload --port 8085
+# Legacy FastAPI shim (server.py) removed. Use built-in FastMCP runner exposed in `mcp_server/mcp_app.py`.
+DEBUG_VERBOSE=1 LOG_LEVEL=DEBUG python -m mcp_server.mcp_app
 ```
 
 ### 3. Verify the Server Is Running
@@ -164,26 +165,34 @@ load_bundle {"path": "/data/bundle.tar.gz", "categories": ["CPU", "TOP", "SMAPS"
 
 ## Available MCP Tools
 
-### Bundle Management
-- **`load_bundle`**: Ingest and activate a support bundle
-- **`active_context`**: Get current active bundle information
-- **`list_bundles_tool`**: List all available bundles
-- **`unload_bundle`**: Remove bundles from the system
-- **`ingest_status`**: Check ingestion status and statistics
+Only the tools below are exposed (legacy doc/search placeholders removed). All return JSON-friendly dicts.
 
-### Metric Discovery & Analysis
-- **`metric_discover`**: Fast lexical search for metric names
-- **`metric_search`**: Semantic search with auto-disambiguation
-- **`metric_schema`**: Get schema details for specific metrics
-- **`timescale_sql`**: Execute read-only SQL queries against TimescaleDB
+### Bundle Lifecycle
+| Tool | Purpose | Key Notes |
+|------|---------|-----------|
+| `load_bundle` | Ingest & activate a bundle (tar.gz or directory) | Reuses existing by hash unless `force=true`; accepts `categories` filter |
+| `active_context` | Current active bundle metadata | Use to get `{bundle_id,start_ms,end_ms}` before queries |
+| `list_bundles_tool` | List all ingested bundles | Marks which one is active |
+| `unload_bundle` | Remove a bundle or purge all | Auto‑promotes another bundle if active removed |
+| `ingest_status` | Ingestion + writer status snapshot | Returns summary + internal writer stats |
 
-### Documentation & Search
-- **`search_docs`**: Lightweight document search
-- **`search_docs_detail`**: Detailed document search with full text
-- **`get_doc_tool`**: Retrieve specific documentation
-- **`concepts`**: List available concept documentation
-- **`workflow_help`**: Get workflow guidance
-- **`fastpath_architecture`**: Returns L4 fast path DNS acceleration concept (cycles_per_packet, busy_percent, cache hit vs miss, vDCA DPDK execution) to ground packet/fast path efficiency answers.
+### Metric & Schema Discovery
+| Tool | Purpose | Key Notes |
+|------|---------|-----------|
+| `metric_discover` | Fast lexical token match | Substring scoring + small CPU bonus; no semantics |
+| `metric_search` | Semantic/lexical search with disambiguation | Auto decision when top score >=0.90 or gap >=0.15; injects hints |
+| `metric_schema` | Schema + example SQL for a metric | Returns columns, category, example query template |
+
+### Query Execution
+| Tool | Purpose | Key Notes |
+|------|---------|-----------|
+| `timescale_sql` | Safe read-only SQL | Single SELECT / WITH only; auto LIMIT if none present |
+
+### Concept / Context
+| Tool | Purpose | Key Notes |
+|------|---------|-----------|
+| `fastpath_architecture` | Fast path / packet processing concept doc | Ground answers about DPDK, batching, zero‑copy, NUMA tuning |
+
 
 
 ## Example Usage Prompts
@@ -276,17 +285,11 @@ timescale_sql {
 }
 ```
 
-### Documentation Search
+### Concept Grounding
 
 ```
-Find documentation about specific topics:
-search_docs {"query": "database connection pooling", "top_k": 3}
-
-Get detailed documentation:
-search_docs_detail {"query": "memory management", "semantic": true}
-
-Look up specific concepts:
-concepts {}
+Get fast path architecture grounding:
+fastpath_architecture {}
 ```
 
 ## Generic MCP Client Prompts
@@ -383,18 +386,14 @@ These are natural language prompts you can use with any MCP client (VS Code, Cla
 "Create forecasting models based on historical resource usage trends"
 ```
 
-### Documentation & Schema Exploration
+### Schema & Concept Exploration
 
 ```
-"Search documentation for database connection pooling best practices"
-
-"Find information about memory management configurations"
-
 "Show me the schema and example queries for CPU utilization metrics"
 
-"Get documentation about network interface monitoring"
+"Explain fast path packet processing principles (use concept doc)"
 
-"Find troubleshooting guides for high disk I/O scenarios"
+"List the columns for process CPU metrics and how to aggregate them"
 ```
 
 ### Example Workflows
